@@ -82,7 +82,21 @@ console.log('[neapi check] last 8 bytes:',
 
 if (decrypted.length >= 9) {
   const blockHeader = decrypted.readUIntLE(6, 3)
+console.log('[neapi verify] header raw:',
+  blockHeader.toString(16)
+)
 
+console.log('[neapi verify] header decimal:',
+  blockHeader
+)
+
+console.log('[neapi verify] calculated size:',
+  blockHeader >>> 3
+)
+
+console.log('[neapi verify] bytes 6-8:',
+  decrypted.subarray(6, 9).toString('hex')
+)
   console.log('[neapi check] block type:',
     (blockHeader >> 1) & 3
   )
