@@ -18,19 +18,24 @@ const tmpPath = os.tmpdir()
 async function generateConfig() {
   console.log('[INIT] Starting configuration')
 
-  // 1. 生成并固定设备 ID
+  // 第一步：生成中国 IP
   global.cnIp = generateRandomChineseIP()
 
+  // 第二步：固定设备 ID
   if (!global.deviceId) {
     global.deviceId = generateDeviceId()
   }
 
   const deviceId = global.deviceId
-  const publicKeyPath = path.join(tmpPath, 'xeapi_public_key')
 
   console.log('[XEAPI] Device ID:', deviceId)
 
-  // 2. 读取已有公钥
+  const publicKeyPath = path.resolve(
+    tmpPath,
+    'xeapi_public_key'
+  )
+
+  // 第三步：读取已有公钥
   let currentPublicKey = {}
 
   try {
@@ -40,10 +45,13 @@ async function generateConfig() {
       )
     }
   } catch (error) {
-    console.log('[XEAPI] Cached key invalid:', error.message)
+    console.log(
+      '[XEAPI] Cached public key invalid:',
+      error.message
+    )
   }
 
-  // 3. 获取 XEAPI 公钥
+  // 第四步：优先获取 XEAPI 公钥
   console.log('[XEAPI] Requesting public key...')
 
   const publicKey = await getXeapiPublicKey(
@@ -52,34 +60,43 @@ async function generateConfig() {
   )
 
   if (!publicKey || !publicKey.sk) {
-    throw new Error('[XEAPI] Public key response invalid')
+    throw new Error(
+      '[XEAPI] Public key missing or invalid'
+    )
   }
 
-  // 4. 保存公钥
+  // 第五步：保存公钥
   fs.writeFileSync(
     publicKeyPath,
     JSON.stringify(publicKey),
     'utf-8'
   )
 
-  // 5. 验证公钥文件
+  // 第六步：重新读取验证
   const savedKey = JSON.parse(
     fs.readFileSync(publicKeyPath, 'utf-8')
   )
 
   if (!savedKey.sk) {
-    throw new Error('[XEAPI] Public key save verification failed')
+    throw new Error(
+      '[XEAPI] Public key verification failed'
+    )
   }
 
-  console.log('[XEAPI] Public key saved successfully')
-  console.log('[XEAPI] Public key version:', savedKey.version)
+  console.log(
+    '[XEAPI] Public key saved successfully'
+  )
 
-  // 6. 注册匿名用户
+  // 第七步：注册匿名用户
   console.log('[ANONYMOUS] Registering...')
 
   const res = await register_anonymous()
 
-  if (!res || !res.body || Number(res.body.code) !== 200) {
+  if (
+    !res ||
+    !res.body ||
+    Number(res.body.code) !== 200
+  ) {
     throw new Error(
       '[ANONYMOUS] Registration failed: ' +
       JSON.stringify(res?.body || {})
@@ -93,15 +110,20 @@ async function generateConfig() {
 
     if (cookieObj.MUSIC_A) {
       fs.writeFileSync(
-        path.join(tmpPath, 'anonymous_token'),
+        path.resolve(tmpPath, 'anonymous_token'),
         cookieObj.MUSIC_A,
         'utf-8'
       )
     }
   }
 
-  console.log('[ANONYMOUS] Registration completed')
-  console.log('[INIT] XEAPI initialization completed')
+  console.log(
+    '[ANONYMOUS] Registration completed'
+  )
+
+  console.log(
+    '[INIT] XEAPI initialization completed'
+  )
 }
 
 module.exports = generateConfig
