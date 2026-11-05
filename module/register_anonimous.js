@@ -25,9 +25,15 @@ function cloudmusic_dll_encode_id(some_id) {
 }
 
 module.exports = async (query, request) => {
-  const deviceId = global.deviceId || generateDeviceId()
-  logger.info(`Successfully registered anonimous token, deviceId: ${deviceId}`)
-  global.deviceId = deviceId
+ // 优先复用初始化阶段生成的 deviceId
+const deviceId = global.deviceId || generateDeviceId()
+
+// 保存设备 ID，确保 XEAPI 公钥和匿名注册使用同一个设备
+global.deviceId = deviceId
+
+logger.info(
+  `Using anonymous deviceId: ${deviceId}`
+)
   const encodedId = CryptoJS.enc.Base64.stringify(
     CryptoJS.enc.Utf8.parse(
       `${deviceId} ${cloudmusic_dll_encode_id(deviceId)}`,
