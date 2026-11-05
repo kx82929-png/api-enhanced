@@ -111,6 +111,19 @@ async function updateRecord(recordId, fields) {
   )
 }
 
+// 从各种错误形态中提取可读原因（网易云接口错误常以 {code,message} 形式挂在 e.body 上）
+function errText(e) {
+  if (!e) return '未知错误'
+  if (e.message) return String(e.message)
+  const b = e.body || e
+  if (b && (b.message || b.msg)) return String(b.message || b.msg)
+  try {
+    return JSON.stringify(b).slice(0, 180)
+  } catch (_) {
+    return String(b)
+  }
+}
+
 let mainModules = null
 function api() {
   if (!mainModules) mainModules = require('../main')
@@ -128,7 +141,8 @@ async function addToPlaylist(songId, playlistId) {
   const code = Number(body && body.code)
   // 502 = 歌单里已有该歌曲（视为成功）
   if (code === 200 || code === 502) return code === 502 ? 'already' : 'added'
-  throw new Error('加入歌单失败: ' + JSON.stringify(body || res).slice(0, 200))
+  const reason = (body && (body.message || body.msg)) || JSON.stringify(body || res).slice(0, 160)
+  throw new Error('加入歌单失败: ' + reason)
 }
 
 // 加红心（进"我喜欢的音乐"）
@@ -136,7 +150,8 @@ async function likeSong(songId) {
   const res = await api().like_v1({ id: songId, like: 'true' })
   const body = res && res.body
   if (Number(body && body.code) === 200) return 'liked'
-  throw new Error('加红心失败: ' + JSON.stringify(body || res).slice(0, 200))
+  const reason = (body && (body.message || body.msg)) || JSON.stringify(body || res).slice(0, 160)
+  throw new Error('加红心失败: ' + reason)
 }
 
 async function processPending() {
@@ -213,11 +228,11 @@ async function processPending() {
       out.action = action
     } catch (e) {
       out.ok = false
-      out.error = e.message
+      out.error = errText(e)
       try {
         const failFields = { [FEISHU_FIELD_STATUS]: FEISHU_STATUS_FAILED }
         if (FEISHU_FIELD_RESULT) {
-          failFields[FEISHU_FIELD_RESULT] = String(e.message).slice(0, 180)
+          failFields[FEISHU_FIELD_RESULT] = errText(e).slice(0, 180)
         }
         await updateRecord(recordId, failFields)
       } catch (e2) {
@@ -252,7 +267,12 @@ function startFeishuSync() {
     syncing = true
     try {
       const r = await processPending()
-      if (r.processed) console.log('[feishu-sync] ' + JSON.stringify(r).slice(0, 800))
+      if (r.processed) {
+        console.log('[feishu-sync] processed=' + r.processed)
+        for (const it of r.results || []) {
+          console.log('[feishu-sync] ' + JSON.stringify(it))
+        }
+      }
     } catch (e) {
       console.log('[feishu-sync] error: ' + e.message)
     } finally {
