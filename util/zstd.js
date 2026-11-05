@@ -30,11 +30,9 @@ const compress = (input) => {
 
 const decompress = (input) => {
   const buf = Buffer.isBuffer(input) ? input : Buffer.from(input)
-  return hasNative
-    ? zlib.zstdDecompressSync(buf)
-    : Buffer.from(fzstdDecompress(buf))
-}
 
+  return Buffer.from(fzstdDecompress(buf))
+}
 module.exports = {
   compress,
   decompress,
