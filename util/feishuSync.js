@@ -21,6 +21,11 @@
 
 const axios = require('axios')
 
+// 兼容两种变量名：FEISHU_BASE_TOKEN 或 FEISHU_APP_TOKEN
+function baseToken() {
+  return process.env.FEISHU_BASE_TOKEN || process.env.FEISHU_APP_TOKEN || ''
+}
+
 let tokenCache = { token: '', expireAt: 0 }
 let syncing = false
 
@@ -72,7 +77,7 @@ async function listRecords() {
     if (pageToken) q.set('page_token', pageToken)
     const res = await axios.get(
       'https://open.feishu.cn/open-apis/bitable/v1/apps/' +
-        process.env.FEISHU_BASE_TOKEN +
+        baseToken() +
         '/tables/' +
         process.env.FEISHU_TABLE_ID +
         '/records?' +
@@ -90,7 +95,7 @@ async function updateRecord(recordId, fields) {
   const token = await getTenantToken()
   await axios.put(
     'https://open.feishu.cn/open-apis/bitable/v1/apps/' +
-      process.env.FEISHU_BASE_TOKEN +
+      baseToken() +
       '/tables/' +
       process.env.FEISHU_TABLE_ID +
       '/records/' +
@@ -228,7 +233,7 @@ function isConfigured() {
   return !!(
     process.env.FEISHU_APP_ID &&
     process.env.FEISHU_APP_SECRET &&
-    process.env.FEISHU_BASE_TOKEN &&
+    baseToken() &&
     process.env.FEISHU_TABLE_ID
   )
 }
