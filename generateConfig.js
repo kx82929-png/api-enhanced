@@ -1,127 +1,107 @@
-const fs = require('fs')
-const path = require('path')
-const { register_anonimous } = require('./main')
-const {
-  cookieToJson,
-  generateRandomChineseIP,
-  generateDeviceId,
-} = require('./util/index')
-const { getXeapiPublicKey } = require('./util/xeapiKey')
-const { loadNeapiKey } = require('./util/neapiKey')
-const registerNeapikey = require('./module/register_neapikey')
-const tmpPath = require('os').tmpdir()
-
 
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
+
 const { register_anonymous } = require('./main')
+
 const {
   cookieToJson,
   generateRandomChineseIP,
   generateDeviceId,
 } = require('./util/index')
+
 const { getXeapiPublicKey } = require('./util/xeapiKey')
-const { loadNeapiKey } = require('./util/neapiKey')
-const registerNeapikey = require('./module/register_neapikey')
-const tmpPath = require('os').tmpdir()
 
-const fs = require('fs')
-const path = require('path')
-
-const {
-  register_anonymous
-} = require('./main')
-
-const {
-  cookieToJson,
-  generateRandomChineseIP,
-  generateDeviceId
-} = require('./util/index')
-
-const {
-  getXeapiPublicKey
-} = require('./util/xeapiKey')
-
-const {
-  loadNeapiKey
-} = require('./util/neapiKey')
-
-const registerNeapikey =
-  require('./module/register_neapikey')
-
-const tmpPath = require('os').tmpdir()
+const tmpPath = os.tmpdir()
 
 async function generateConfig() {
+  console.log('[INIT] Starting configuration')
+
+  // 1. 生成并固定设备 ID
   global.cnIp = generateRandomChineseIP()
 
-  // 第一步：生成并固定 deviceId
   if (!global.deviceId) {
     global.deviceId = generateDeviceId()
   }
 
   const deviceId = global.deviceId
+  const publicKeyPath = path.join(tmpPath, 'xeapi_public_key')
 
-  // 第二步：读取本地已有公钥
+  console.log('[XEAPI] Device ID:', deviceId)
+
+  // 2. 读取已有公钥
   let currentPublicKey = {}
 
   try {
-    currentPublicKey = JSON.parse(
-      fs.readFileSync(
-        path.resolve(tmpPath, 'xeapi_public_key'),
-        'utf-8'
+    if (fs.existsSync(publicKeyPath)) {
+      currentPublicKey = JSON.parse(
+        fs.readFileSync(publicKeyPath, 'utf-8')
       )
-    )
+    }
   } catch (error) {
-    console.log('[XEAPI] No cached public key')
+    console.log('[XEAPI] Cached key invalid:', error.message)
   }
 
-  // 第三步：先获取 XEAPI 公钥
+  // 3. 获取 XEAPI 公钥
+  console.log('[XEAPI] Requesting public key...')
+
   const publicKey = await getXeapiPublicKey(
     currentPublicKey,
     deviceId
   )
 
   if (!publicKey || !publicKey.sk) {
-    throw new Error('XEAPI public key is invalid')
+    throw new Error('[XEAPI] Public key response invalid')
   }
 
-  // 第四步：保存公钥
+  // 4. 保存公钥
   fs.writeFileSync(
-    path.resolve(tmpPath, 'xeapi_public_key'),
+    publicKeyPath,
     JSON.stringify(publicKey),
     'utf-8'
   )
 
-  console.log('[XEAPI] Public key saved successfully')
-  console.log('[XEAPI] Device ID:', deviceId)
+  // 5. 验证公钥文件
+  const savedKey = JSON.parse(
+    fs.readFileSync(publicKeyPath, 'utf-8')
+  )
 
-  // 第五步：注册匿名用户
+  if (!savedKey.sk) {
+    throw new Error('[XEAPI] Public key save verification failed')
+  }
+
+  console.log('[XEAPI] Public key saved successfully')
+  console.log('[XEAPI] Public key version:', savedKey.version)
+
+  // 6. 注册匿名用户
+  console.log('[ANONYMOUS] Registering...')
+
   const res = await register_anonymous()
+
+  if (!res || !res.body || Number(res.body.code) !== 200) {
+    throw new Error(
+      '[ANONYMOUS] Registration failed: ' +
+      JSON.stringify(res?.body || {})
+    )
+  }
 
   const cookie = res.body.cookie
 
   if (cookie) {
     const cookieObj = cookieToJson(cookie)
 
-    fs.writeFileSync(
-      path.resolve(tmpPath, 'anonymous_token'),
-      cookieObj.MUSIC_A || '',
-      'utf-8'
-    )
+    if (cookieObj.MUSIC_A) {
+      fs.writeFileSync(
+        path.join(tmpPath, 'anonymous_token'),
+        cookieObj.MUSIC_A,
+        'utf-8'
+      )
+    }
   }
 
-  console.log('[XEAPI] Anonymous registration completed')
-
-  // 第六步：获取 NEAPI 配置
-  const current = loadNeapiKey()
-
-  await registerNeapikey(
-    {
-      version: current ? current.version : 0,
-      behavior: current ? 'update' : 'open'
-    },
-    null
-  )
+  console.log('[ANONYMOUS] Registration completed')
+  console.log('[INIT] XEAPI initialization completed')
 }
 
 module.exports = generateConfig
