@@ -22,6 +22,13 @@ async function start() {
   require('./server').serveNcmApi({
     checkVersion: true,
   })
+
+  // 启动"飞书表格 -> 网易云我喜欢的音乐"同步器（未配置飞书环境变量时自动跳过）
+  try {
+    require('./util/feishuSync').startFeishuSync()
+  } catch (error) {
+    console.log('[feishu-sync] start failed: ' + (error && error.message))
+  }
 }
 
 start().catch((error) => {
