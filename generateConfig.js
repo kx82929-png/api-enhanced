@@ -42,21 +42,31 @@ async function generateConfig() {
   )
 
   // ===== 第 3 步：注册匿名用户（复用同一个 deviceId），保存 MUSIC_A =====
-  const res = await register_anonimous()
-  const cookie = res.body && res.body.cookie
-  if (!cookie || cookie.indexOf('MUSIC_A=') === -1) {
-    throw new Error(
-      'anonymous register failed: no MUSIC_A cookie, body=' +
-        JSON.stringify(res.body || res).slice(0, 300),
+  // 注意：Render 出口 IP 在海外，匿名注册接口会返回 code 400；
+  // 带上中国 IP 头（X-Real-IP/X-Forwarded-For）可规避。
+  // 该步骤失败不阻断启动：搜索、歌曲详情、播放链接不依赖 MUSIC_A。
+  try {
+    const res = await register_anonimous({ realIP: global.cnIp })
+    const cookie = res.body && res.body.cookie
+    if (!cookie || cookie.indexOf('MUSIC_A=') === -1) {
+      throw new Error(
+        'no MUSIC_A cookie, body=' +
+          JSON.stringify(res.body || res).slice(0, 300),
+      )
+    }
+    const cookieObj = cookieToJson(cookie)
+    fs.writeFileSync(
+      path.resolve(tmpPath, 'anonymous_token'),
+      cookieObj.MUSIC_A,
+      'utf-8',
+    )
+    console.log('[init][3/4] anonymous token (MUSIC_A) saved')
+  } catch (error) {
+    console.log(
+      '[init][3/4] anonymous register failed (non-fatal):',
+      error.message,
     )
   }
-  const cookieObj = cookieToJson(cookie)
-  fs.writeFileSync(
-    path.resolve(tmpPath, 'anonymous_token'),
-    cookieObj.MUSIC_A,
-    'utf-8',
-  )
-  console.log('[init][3/4] anonymous token (MUSIC_A) saved')
 
   // ===== 第 4 步：NEAPI 配置（独立阶段，失败暂不阻断启动，后续单独排查） =====
   try {
