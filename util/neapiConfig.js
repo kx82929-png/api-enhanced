@@ -108,6 +108,18 @@ if (decrypted.length >= 9) {
     throw new Error('neapi encrypted data length mismatch')
   }
 
+console.log('[neapi check] decrypted total:',
+  decrypted.length
+)
+
+console.log('[neapi check] full header:',
+  decrypted.subarray(0, 32).toString('hex')
+)
+
+console.log('[neapi check] remaining bytes:',
+  decrypted.subarray(9).length
+)
+
   return zstd.decompress(decrypted)
 }
 
