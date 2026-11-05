@@ -1,9 +1,8 @@
-
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
 
-const { register_anonymous } = require('./main')
+const { register_anonimous } = require('./main')
 
 const {
   cookieToJson,
