@@ -59,18 +59,24 @@ const rc4 = (key, data) => {
   return out
 }
 
-const unwrapContainer = (raw) => {
-  const key = crypto.publicDecrypt(
-    crypto.createPublicKey({
-      key: CONFIG_PUBLIC_KEY,
-      format: 'der',
-      type: 'pkcs1',
-    }),
-    raw.subarray(0, 64),
-  )
-  const size = raw.readUInt32LE(64)
-  return zstd.decompress(rc4(key, raw.subarray(68, 68 + size)))
+const size = raw.readUInt32LE(64)
+const encrypted = raw.subarray(68, 68 + size)
+const decrypted = rc4(key, encrypted)
+
+console.log('[neapi debug] raw length:', raw.length)
+console.log('[neapi debug] declared size:', size)
+console.log('[neapi debug] encrypted length:', encrypted.length)
+console.log('[neapi debug] key length:', key.length)
+console.log(
+  '[neapi debug] decrypted header:',
+  decrypted.subarray(0, 8).toString('hex')
+)
+
+if (encrypted.length !== size) {
+  throw new Error('neapi encrypted data length mismatch')
 }
+
+return zstd.decompress(decrypted)
 
 class ChunkReader {
   constructor(buf, pos = 0) {
