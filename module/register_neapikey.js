@@ -24,6 +24,17 @@ module.exports = async (query, request) => {
 
   // file 为空表示本地已是最新，无需更新
   const { file, circleTime } = res.data.data
+  if (file) {
+  const raw = Buffer.from(file, 'base64')
+
+  console.log('[neapi config] file type:', typeof file)
+  console.log('[neapi config] base64 length:', file.length)
+  console.log('[neapi config] decoded bytes:', raw.length)
+  console.log(
+    '[neapi config] declared size:',
+    raw.length >= 68 ? raw.readUInt32LE(64) : 'header-too-short'
+  )
+}
   const config = file
     ? saveNeapiKey(decodeConfig(Buffer.from(file, 'base64')), circleTime)
     : null
