@@ -1,19 +1,25 @@
-// 飞书表格 -> 网易云"我喜欢的音乐"同步器
-// 工作方式：定时扫描多维表格中状态为"待执行"的记录，
-// 按搜索词搜歌 -> 调 /api/v1/radio/like 加红心（进入"我喜欢的音乐"）-> 回写状态
+// 飞书表格 -> 网易云 自动同步器
+// 工作方式：定时扫描多维表格中状态为"待同步"的记录，
+//   优先用"网易云歌曲ID"直接加歌（无 ID 时才按搜索词搜第一首），
+//   有"目标歌单ID"就加入该歌单，没有就加红心（进"我喜欢的音乐"），
+//   成功后回写状态与结果。
 //
 // 依赖环境变量：
 //   FEISHU_APP_ID / FEISHU_APP_SECRET   飞书自建应用凭据（需已发布并开通多维表格读写权限）
 //   FEISHU_BASE_TOKEN / FEISHU_TABLE_ID 目标多维表格
-//   FEISHU_FIELD_QUERY   搜索词字段名（默认"搜索词"）
-//   FEISHU_FIELD_STATUS  状态字段名（默认"状态"，值：待执行/执行中/已完成/失败）
-//   FEISHU_FIELD_TITLE   歌曲名称字段名（可选，成功后回写匹配到的歌名）
-//   FEISHU_FIELD_ERROR   错误原因字段名（默认"错误原因"）
-//   SYNC_INTERVAL_MS     轮询间隔毫秒（默认 60000）
-//   NETEASE_COOKIE       网易云账号 Cookie（MUSIC_U=...），加红心必需
+//   FEISHU_FIELD_SONG_ID   歌曲ID字段名（如"网易云歌曲ID"）
+//   FEISHU_FIELD_QUERY     搜索词字段名（可选，没有歌曲ID时才用）
+//   FEISHU_FIELD_STATUS    状态字段名（如"同步状态"）
+//   FEISHU_STATUS_PENDING  待处理状态值（默认"待同步"）
+//   FEISHU_STATUS_DONE     成功状态值（默认"已同步"）
+//   FEISHU_STATUS_FAILED   失败状态值（默认"同步失败"）
+//   FEISHU_FIELD_PLAYLIST_ID   目标歌单ID字段名（如"目标歌单ID"，可选）
+//   FEISHU_FIELD_PLAYLIST_NAME 目标歌单名称字段名（如"AI 目标歌单"，可选）
+//   FEISHU_FIELD_RESULT    结果字段名（如"AI 同步结果"，可选）
+//   SYNC_INTERVAL_MS       轮询间隔毫秒（默认 60000）
+//   NETEASE_COOKIE         网易云账号 Cookie（MUSIC_U=...），必需
 
 const axios = require('axios')
-const logger = require('./logger.js')
 
 let tokenCache = { token: '', expireAt: 0 }
 let syncing = false
@@ -43,10 +49,17 @@ async function getTenantToken() {
 function cellText(v) {
   if (v == null) return ''
   if (typeof v === 'string') return v
+  if (typeof v === 'number') return String(v)
   if (Array.isArray(v)) {
-    return v.map((i) => (typeof i === 'string' ? i : (i && i.text) || '')).join('')
+    return v
+      .map((i) => (typeof i === 'string' ? i : (i && (i.text || i.name)) || ''))
+      .join('')
   }
-  if (typeof v === 'object' && v.text) return String(v.text)
+  if (typeof v === 'object') {
+    if (v.text) return String(v.text)
+    if (v.name) return String(v.name)
+    if (v.link) return String(v.link)
+  }
   return String(v)
 }
 
@@ -84,7 +97,10 @@ async function updateRecord(recordId, fields) {
       recordId,
     { fields },
     {
-      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'Content-Type': 'application/json',
+      },
       timeout: 15000,
     },
   )
@@ -96,58 +112,108 @@ function api() {
   return mainModules
 }
 
+// 加入歌单
+async function addToPlaylist(songId, playlistId) {
+  const res = await api().playlist_tracks({
+    op: 'add',
+    pid: playlistId,
+    tracks: String(songId),
+  })
+  const body = res && res.body
+  const code = Number(body && body.code)
+  // 502 = 歌单里已有该歌曲（视为成功）
+  if (code === 200 || code === 502) return code === 502 ? 'already' : 'added'
+  throw new Error('加入歌单失败: ' + JSON.stringify(body || res).slice(0, 200))
+}
+
+// 加红心（进"我喜欢的音乐"）
 async function likeSong(songId) {
   const res = await api().like_v1({ id: songId, like: 'true' })
   const body = res && res.body
-  if (Number(body && body.code) === 200) return true
+  if (Number(body && body.code) === 200) return 'liked'
   throw new Error('加红心失败: ' + JSON.stringify(body || res).slice(0, 200))
 }
 
 async function processPending() {
   const {
-    FEISHU_FIELD_QUERY = '搜索词',
-    FEISHU_FIELD_STATUS = '状态',
-    FEISHU_FIELD_TITLE,
-    FEISHU_FIELD_ERROR = '错误原因',
+    FEISHU_FIELD_SONG_ID,
+    FEISHU_FIELD_QUERY,
+    FEISHU_FIELD_STATUS,
+    FEISHU_STATUS_PENDING = '待同步',
+    FEISHU_STATUS_DONE = '已同步',
+    FEISHU_STATUS_FAILED = '同步失败',
+    FEISHU_FIELD_PLAYLIST_ID,
+    FEISHU_FIELD_PLAYLIST_NAME,
+    FEISHU_FIELD_RESULT,
   } = process.env
 
+  if (!FEISHU_FIELD_STATUS) throw new Error('未配置 FEISHU_FIELD_STATUS（状态列名）')
+  if (!FEISHU_FIELD_SONG_ID && !FEISHU_FIELD_QUERY) {
+    throw new Error('需要配置 FEISHU_FIELD_SONG_ID 或 FEISHU_FIELD_QUERY 之一')
+  }
   if (!process.env.NETEASE_COOKIE) {
-    throw new Error('NETEASE_COOKIE 未配置（网易云未登录），无法加红心')
+    throw new Error('NETEASE_COOKIE 未配置（网易云未登录）')
   }
 
   const records = await listRecords()
   const pending = records.filter((r) => {
     const f = r.fields || {}
-    return (
-      cellText(f[FEISHU_FIELD_STATUS]) === '待执行' && cellText(f[FEISHU_FIELD_QUERY])
-    )
+    const status = cellText(f[FEISHU_FIELD_STATUS])
+    const hasTarget =
+      (FEISHU_FIELD_SONG_ID && cellText(f[FEISHU_FIELD_SONG_ID])) ||
+      (FEISHU_FIELD_QUERY && cellText(f[FEISHU_FIELD_QUERY]))
+    return status === FEISHU_STATUS_PENDING && !!hasTarget
   })
   if (!pending.length) return { processed: 0 }
 
   const results = []
   for (const rec of pending) {
     const f = rec.fields || {}
-    const query = cellText(f[FEISHU_FIELD_QUERY])
     const recordId = rec.record_id || rec.id
-    const out = { recordId, query }
+    const songId = FEISHU_FIELD_SONG_ID ? cellText(f[FEISHU_FIELD_SONG_ID]) : ''
+    const query = FEISHU_FIELD_QUERY ? cellText(f[FEISHU_FIELD_QUERY]) : ''
+    const playlistId = FEISHU_FIELD_PLAYLIST_ID
+      ? cellText(f[FEISHU_FIELD_PLAYLIST_ID])
+      : ''
+    const playlistName = FEISHU_FIELD_PLAYLIST_NAME
+      ? cellText(f[FEISHU_FIELD_PLAYLIST_NAME])
+      : ''
+    const out = { recordId, songId, query, playlistId }
     try {
-      const s = await api().search({ keywords: query, limit: 5 })
-      const songs = (s.body && s.body.result && s.body.result.songs) || []
-      if (!songs.length) throw new Error('搜索无结果: ' + query)
-      const song = songs[0]
-      await likeSong(song.id)
-      const fields = { [FEISHU_FIELD_STATUS]: '已完成' }
-      if (FEISHU_FIELD_TITLE) fields[FEISHU_FIELD_TITLE] = song.name
-      await updateRecord(recordId, fields)
+      let targetId = songId
+      if (!targetId) {
+        const s = await api().search({ keywords: query, limit: 5 })
+        const songs = (s.body && s.body.result && s.body.result.songs) || []
+        if (!songs.length) throw new Error('搜索无结果: ' + query)
+        targetId = songs[0].id
+        out.matched = songs[0].name
+      }
+      let action
+      if (playlistId) {
+        action = await addToPlaylist(targetId, playlistId)
+        out.addedTo = '歌单 ' + (playlistName || playlistId)
+      } else {
+        action = await likeSong(targetId)
+        out.addedTo = '我喜欢的音乐'
+      }
+      const doneFields = { [FEISHU_FIELD_STATUS]: FEISHU_STATUS_DONE }
+      if (FEISHU_FIELD_RESULT) {
+        doneFields[FEISHU_FIELD_RESULT] =
+          action === 'already'
+            ? '已在' + out.addedTo + '中'
+            : '已加入' + out.addedTo
+      }
+      await updateRecord(recordId, doneFields)
       out.ok = true
-      out.song =
-        song.name +
-        ((song.artists && song.artists[0] && '-' + song.artists[0].name) || '')
+      out.action = action
     } catch (e) {
       out.ok = false
       out.error = e.message
       try {
-        const failFields = { [FEISHU_FIELD_STATUS]: '失败', [FEISHU_FIELD_ERROR]: String(e.message).slice(0, 200) }
+        const failFields = { [FEISHU_FIELD_STATUS]: FEISHU_STATUS_FAILED }
+        if (FEISHU_FIELD_RESULT) {
+          failFields[FEISHU_FIELD_RESULT] = String(e.message).slice(0, 180)
+        }
         await updateRecord(recordId, failFields)
       } catch (e2) {
         out.error += ' | 回写失败: ' + e2.message
@@ -181,7 +247,7 @@ function startFeishuSync() {
     syncing = true
     try {
       const r = await processPending()
-      if (r.processed) console.log('[feishu-sync] ' + JSON.stringify(r).slice(0, 600))
+      if (r.processed) console.log('[feishu-sync] ' + JSON.stringify(r).slice(0, 800))
     } catch (e) {
       console.log('[feishu-sync] error: ' + e.message)
     } finally {
