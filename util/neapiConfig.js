@@ -72,7 +72,29 @@ const unwrapContainer = (raw) => {
   const size = raw.readUInt32LE(64)
   const encrypted = raw.subarray(68, 68 + size)
   const decrypted = rc4(key, encrypted)
+console.log('[neapi check] first 16 bytes:',
+  decrypted.subarray(0, 16).toString('hex')
+)
 
+console.log('[neapi check] last 8 bytes:',
+  decrypted.subarray(-8).toString('hex')
+)
+
+if (decrypted.length >= 9) {
+  const blockHeader = decrypted.readUIntLE(6, 3)
+
+  console.log('[neapi check] block type:',
+    (blockHeader >> 1) & 3
+  )
+
+  console.log('[neapi check] block size:',
+    blockHeader >>> 3
+  )
+
+  console.log('[neapi check] last block:',
+    blockHeader & 1
+  )
+}
   console.log('[neapi debug] raw length:', raw.length)
   console.log('[neapi debug] declared size:', size)
   console.log('[neapi debug] encrypted length:', encrypted.length)
