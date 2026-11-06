@@ -13,6 +13,7 @@
 //   FEISHU_STATUS_PENDING  待处理状态值（默认"待同步"）
 //   FEISHU_STATUS_DONE     成功状态值（默认"已同步"）
 //   FEISHU_STATUS_FAILED   失败状态值（默认"同步失败"）
+//   FEISHU_STATUS_DELETE   删除状态值（默认"待删除"）：状态为此值的行会被从网易云移除
 //   FEISHU_FIELD_PLAYLIST_ID   目标歌单ID字段名（如"目标歌单ID"，可选）
 //   FEISHU_FIELD_PLAYLIST_NAME 目标歌单名称字段名（如"AI 目标歌单"，可选）
 //   FEISHU_FIELD_RESULT    结果字段名（如"AI 同步结果"，可选）
@@ -154,6 +155,30 @@ async function likeSong(songId) {
   throw new Error('加红心失败: ' + reason)
 }
 
+// 取消红心（从"我喜欢的音乐"移除）
+async function unlikeSong(songId) {
+  const res = await api().like_v1({ id: songId, like: 'false' })
+  const body = res && res.body
+  if (Number(body && body.code) === 200) return 'unliked'
+  const reason = (body && (body.message || body.msg)) || JSON.stringify(body || res).slice(0, 160)
+  throw new Error('取消红心失败: ' + reason)
+}
+
+// 从指定歌单移除
+async function removeFromPlaylist(songId, playlistId) {
+  const res = await api().playlist_tracks({
+    op: 'del',
+    pid: playlistId,
+    tracks: String(songId),
+  })
+  const body = res && res.body
+  const code = Number(body && body.code)
+  // 502 = 歌单里没有该歌曲（视为已移除）
+  if (code === 200 || code === 502) return 'removed'
+  const reason = (body && (body.message || body.msg)) || JSON.stringify(body || res).slice(0, 160)
+  throw new Error('移除失败: ' + reason)
+}
+
 async function processPending() {
   const {
     FEISHU_FIELD_SONG_ID,
@@ -162,6 +187,7 @@ async function processPending() {
     FEISHU_STATUS_PENDING = '待同步',
     FEISHU_STATUS_DONE = '已同步',
     FEISHU_STATUS_FAILED = '同步失败',
+    FEISHU_STATUS_DELETE = '待删除',
     FEISHU_FIELD_PLAYLIST_ID,
     FEISHU_FIELD_PLAYLIST_NAME,
     FEISHU_FIELD_RESULT,
@@ -176,13 +202,17 @@ async function processPending() {
   }
 
   const records = await listRecords()
+  // 待同步 = 添加；待删除 = 移除。两种都要求行里有歌曲ID或搜索词
   const pending = records.filter((r) => {
     const f = r.fields || {}
     const status = cellText(f[FEISHU_FIELD_STATUS])
     const hasTarget =
       (FEISHU_FIELD_SONG_ID && cellText(f[FEISHU_FIELD_SONG_ID])) ||
       (FEISHU_FIELD_QUERY && cellText(f[FEISHU_FIELD_QUERY]))
-    return status === FEISHU_STATUS_PENDING && !!hasTarget
+    return (
+      (status === FEISHU_STATUS_PENDING || status === FEISHU_STATUS_DELETE) &&
+      !!hasTarget
+    )
   })
   if (!pending.length) return { processed: 0 }
 
@@ -199,6 +229,10 @@ async function processPending() {
       ? cellText(f[FEISHU_FIELD_PLAYLIST_NAME])
       : ''
     const out = { recordId, songId, query, playlistId }
+    const isDelete =
+      FEISHU_FIELD_STATUS &&
+      cellText(f[FEISHU_FIELD_STATUS]) === FEISHU_STATUS_DELETE
+    if (isDelete) out.mode = 'remove'
     try {
       let targetId = songId
       if (!targetId) {
@@ -209,7 +243,16 @@ async function processPending() {
         out.matched = songs[0].name
       }
       let action
-      if (playlistId) {
+      if (isDelete) {
+        // 删除流程：有目标歌单ID就从该歌单移除，否则取消红心（移出"我喜欢的音乐"）
+        if (playlistId) {
+          action = await removeFromPlaylist(targetId, playlistId)
+          out.removedFrom = '歌单 ' + (playlistName || playlistId)
+        } else {
+          action = await unlikeSong(targetId)
+          out.removedFrom = '我喜欢的音乐'
+        }
+      } else if (playlistId) {
         action = await addToPlaylist(targetId, playlistId)
         out.addedTo = '歌单 ' + (playlistName || playlistId)
       } else {
@@ -218,10 +261,14 @@ async function processPending() {
       }
       const doneFields = { [FEISHU_FIELD_STATUS]: FEISHU_STATUS_DONE }
       if (FEISHU_FIELD_RESULT) {
-        doneFields[FEISHU_FIELD_RESULT] =
-          action === 'already'
-            ? '已在' + out.addedTo + '中'
-            : '已加入' + out.addedTo
+        if (isDelete) {
+          doneFields[FEISHU_FIELD_RESULT] = '已从' + out.removedFrom + '移除'
+        } else {
+          doneFields[FEISHU_FIELD_RESULT] =
+            action === 'already'
+              ? '已在' + out.addedTo + '中'
+              : '已加入' + out.addedTo
+        }
       }
       await updateRecord(recordId, doneFields)
       out.ok = true
